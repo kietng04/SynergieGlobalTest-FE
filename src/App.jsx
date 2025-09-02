@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { getCategories, getTopArticles, register, login, validateToken, createCollection, getCollections, addArticleToCollection, getArticlesInCollection, updateCollection, deleteCollection, requestPasswordReset, confirmPasswordReset, createSubscription } from './api.js'
+import { getCategories, getTopArticles, register, login, validateToken, createCollection, getCollections, addArticleToCollection, getArticlesInCollection, updateCollection, deleteCollection, requestPasswordReset, confirmPasswordReset, createSubscription, removeArticleFromCollection, getCollectionsByArticle, updateSubscription, createSubscriptionWithParams } from './api.js'
 
 function Modal({ title, onClose, children, footer }){
   return (
@@ -111,8 +111,8 @@ function CreateCollectionModal({ onClose, onCreated }){
       const token = auth?.token
       if(!token) throw new Error('Missing token')
       await createCollection({ name, description }, token)
-      onCreated?.()
-      onClose()
+      try { window.location.reload() } catch { /* no-op */ }
+      return
     }catch(err){ setError(err?.message || 'Create collection failed') }
     finally{ setLoading(false) }
   }
@@ -131,12 +131,45 @@ function CreateCollectionModal({ onClose, onCreated }){
 function ArticleModal({ article, onClose }){
   if(!article) return null
   const dt = new Date(article.publicationDate)
+  const [loadingCollectionsByArticle, setLoadingCollectionsByArticle] = useState(false)
+  const [errorCollectionsByArticle, setErrorCollectionsByArticle] = useState(null)
+  const [collectionsByArticle, setCollectionsByArticle] = useState([])
+
+  useEffect(()=>{
+    if(!article?.id) return
+    const ac = new AbortController()
+    ;(async()=>{
+      try{
+        setLoadingCollectionsByArticle(true)
+        setErrorCollectionsByArticle(null)
+        const auth = (()=>{ try{ return JSON.parse(localStorage.getItem('auth')||'null') } catch { return null } })()
+        const token = auth?.token
+        if(!token) return
+        const list = await getCollectionsByArticle(article.id, token, ac.signal)
+        setCollectionsByArticle(Array.isArray(list)? list : [])
+      }catch(err){ setErrorCollectionsByArticle(err?.message || 'Failed to load collections') }
+      finally{ setLoadingCollectionsByArticle(false) }
+    })()
+    return ()=> ac.abort()
+  },[article?.id])
   return (
     <Modal title={article.headline} onClose={onClose}>
       <div style={{display:'grid',gap:8}}>
         {article.summary && <p style={{margin:0}}>{article.summary}</p>}
         <div style={{fontSize:12,color:'#666'}}>Date: {dt.toLocaleString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })} · Source: <b>{article.source}</b></div>
         {article.url && <a href={article.url} target='_blank' rel='noreferrer'>Read full article</a>}
+        {(loadingCollectionsByArticle) && <div style={{fontSize:12,color:'#666'}}>Loading collections...</div>}
+        {(errorCollectionsByArticle) && <div style={{color:'#b91c1c',fontSize:12}}>{errorCollectionsByArticle}</div>}
+        {(!loadingCollectionsByArticle && collectionsByArticle && collectionsByArticle.length>0) && (
+          <div style={{fontSize:12}}>
+            <div style={{fontWeight:600, marginBottom:4}}>In your collections:</div>
+            <ul style={{margin:0, paddingLeft:18}}>
+              {collectionsByArticle.map(col => (
+                <li key={col.id}>{col.name}</li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
     </Modal>
   )
@@ -164,6 +197,8 @@ export default function App(){
   const [activeCollection,setActiveCollection] = useState(null)
   const [showEditCollection,setShowEditCollection] = useState(false)
   const [subscribing,setSubscribing] = useState(false)
+  const [subEmailFrequency, setSubEmailFrequency] = useState('Daily')
+  const [showSubscriptionModal, setShowSubscriptionModal] = useState(false)
 
   useEffect(()=>{
     if(!isAuthenticated) return
@@ -281,21 +316,45 @@ export default function App(){
               ))}
               {isAuthenticated && selectedCategoryId && (
                 <button
-                  onClick={async()=>{
-                    try{
-                      setSubscribing(true)
-                      const auth = (()=>{ try{ return JSON.parse(localStorage.getItem('auth')||'null') } catch { return null } })()
-                      const token = auth?.token
-                      if(!token) throw new Error('Unauthorized')
-                      const res = await createSubscription(selectedCategoryId, token)
-                      alert(res?.message || 'Subscription created successfully')
-                    }catch(err){ alert(err?.message || 'Failed to subscribe') }
-                    finally{ setSubscribing(false) }
-                  }}
+                  onClick={()=> setShowSubscriptionModal(true)}
                   disabled={subscribing}
                   style={{marginLeft:8}}
                   title='Subscribe to this topic'
-                >{subscribing ? 'Subscribing...' : 'Subscribe to this topic'}</button>
+                >Subscribe to this topic</button>
+              )}
+              {isAuthenticated && selectedCategoryId && (
+                <>
+                  <select value={subEmailFrequency} onChange={e=>setSubEmailFrequency(e.target.value)} style={{marginLeft:8}}>
+                    <option value='Daily'>Daily</option>
+                    <option value='Weekly'>Weekly</option>
+                  </select>
+                  <button
+                    onClick={async()=>{
+                      try{
+                        const auth = (()=>{ try{ return JSON.parse(localStorage.getItem('auth')||'null') } catch { return null } })()
+                        const token = auth?.token
+                        if(!token) throw new Error('Unauthorized')
+                        const updated = await updateSubscription(selectedCategoryId, { emailFrequency: subEmailFrequency }, token)
+                        alert('Subscription updated')
+                      }catch(err){ alert(err?.message || 'Failed to update subscription') }
+                    }}
+                    style={{marginLeft:8}}
+                    title='Update subscription frequency'
+                  >Update subscription</button>
+                  <button
+                    onClick={async()=>{
+                      try{
+                        const auth = (()=>{ try{ return JSON.parse(localStorage.getItem('auth')||'null') } catch { return null } })()
+                        const token = auth?.token
+                        if(!token) throw new Error('Unauthorized')
+                        await updateSubscription(selectedCategoryId, { isActive: false }, token)
+                        alert('Subscription deactivated')
+                      }catch(err){ alert(err?.message || 'Failed to deactivate subscription') }
+                    }}
+                    style={{marginLeft:8}}
+                    title='Deactivate subscription'
+                  >Deactivate</button>
+                </>
               )}
             </div>
             <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))',gap:12}}>
@@ -370,7 +429,7 @@ export default function App(){
       </section>
       {showLogin && <LoginModal onClose={()=>setShowLogin(false)} onLoggedIn={()=>setIsAuthenticated(true)} onForgot={()=>{ setShowLogin(false); setShowForgotPassword(true) }} />}
       {showSignup && <SignupModal onClose={()=>setShowSignup(false)} onSignedUp={()=>setIsAuthenticated(true)} />}
-      {showCreateCollection && <CreateCollectionModal onClose={()=>setShowCreateCollection(false)} onCreated={()=>{ setShowCreateCollection(false); setActiveTab('collections'); }} />}
+      {showCreateCollection && <CreateCollectionModal onClose={()=>setShowCreateCollection(false)} />}
       {activeArticle && <ArticleModal article={activeArticle} onClose={()=>setActiveArticle(null)} />}
       {showSelectCollection && (
         <SelectCollectionModal
@@ -402,6 +461,13 @@ export default function App(){
         <ForgotPasswordModal
           onClose={()=> setShowForgotPassword(false)}
           onCompleted={()=>{ setShowForgotPassword(false); setShowLogin(true) }}
+        />
+      )}
+      {showSubscriptionModal && (
+        <SubscriptionModal
+          categoryId={selectedCategoryId}
+          onClose={()=> setShowSubscriptionModal(false)}
+          onDone={()=> setShowSubscriptionModal(false)}
         />
       )}
     </div>
@@ -565,10 +631,56 @@ function ForgotPasswordModal({ onClose, onCompleted }){
     </Modal>
   )
 }
+
+function SubscriptionModal({ categoryId, onClose, onDone }) {
+  const [frequency, setFrequency] = useState('Daily')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  async function handleSubmit(e){
+    e?.preventDefault?.()
+    setError('')
+    try{
+      setLoading(true)
+      const auth = (()=>{ try{ return JSON.parse(localStorage.getItem('auth')||'null') } catch { return null } })()
+      const token = auth?.token
+      if(!token) throw new Error('Unauthorized')
+      try{
+        await createSubscriptionWithParams(categoryId, { emailFrequency: frequency, isActive: true }, token)
+      }catch(err){
+        await updateSubscription(categoryId, { emailFrequency: frequency, isActive: true }, token)
+      }
+      alert('Subscription saved')
+      onDone?.()
+      onClose?.()
+    }catch(err){ setError(err?.message || 'Failed to save subscription') }
+    finally{ setLoading(false) }
+  }
+
+  return (
+    <Modal
+      title='Subscribe to this topic'
+      onClose={onClose}
+      footer={<button onClick={handleSubmit} disabled={loading}>{loading ? 'Saving...' : 'Save'}</button>}
+    >
+      <div style={{display:'grid',gap:8, minWidth:280}}>
+        <label>
+          Frequency
+          <select value={frequency} onChange={e=>setFrequency(e.target.value)} style={{marginLeft:8}}>
+            <option value='Daily'>Daily</option>
+            <option value='Weekly'>Weekly</option>
+          </select>
+        </label>
+        {error && <div style={{color:'#b91c1c',fontSize:12}}>{error}</div>}
+      </div>
+    </Modal>
+  )
+}
 function CollectionArticlesModal({ collection, onClose }){
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [articles, setArticles] = useState([])
+  const [removingId, setRemovingId] = useState(null)
 
   useEffect(()=>{
     const ac = new AbortController()
@@ -598,6 +710,25 @@ function CollectionArticlesModal({ collection, onClose }){
                 <h4 style={{margin:'0 0 4px',fontSize:16}}>{a.headline}</h4>
                 <div style={{fontSize:12,color:'#666'}}>{a.publicationDate ? new Date(a.publicationDate).toLocaleString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }) : ''}  {a.source}</div>
                 {a.url && <a href={a.url} target='_blank' rel='noreferrer' style={{marginTop:8,display:'inline-block'}}>Open</a>}
+                <div style={{marginTop:8}}>
+                  <button
+                    onClick={async()=>{
+                      try{
+                        if(!a?.id) throw new Error('Missing article id')
+                        setRemovingId(a.id)
+                        const auth = (()=>{ try{ return JSON.parse(localStorage.getItem('auth')||'null') } catch { return null } })()
+                        const token = auth?.token
+                        if(!token) throw new Error('Unauthorized')
+                        const resp = await removeArticleFromCollection(collection?.id, a.id, token)
+                        setArticles(prev => Array.isArray(prev) ? prev.filter(item => item.id !== a.id) : prev)
+                        alert(resp?.message || 'Article removed from collection')
+                      }catch(err){ alert(err?.message || 'Failed to remove article') }
+                      finally{ setRemovingId(null) }
+                    }}
+                    disabled={removingId === a?.id}
+                    title='Remove from this collection'
+                  >{removingId === a?.id ? 'Removing...' : 'Remove'}</button>
+                </div>
               </div>
             ))}
             {articles.length === 0 && <div>No articles in this collection.</div>}
