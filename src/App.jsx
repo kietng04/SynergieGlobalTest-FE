@@ -700,7 +700,7 @@ function CollectionArticlesModal({ collection, onClose }){
 
   return (
     <Modal title={collection?.name || 'Collection'} onClose={onClose}>
-      <div style={{minWidth:300,display:'grid',gap:8}}>
+      <div style={{minWidth:300,maxHeight:'60vh',overflowY:'auto',display:'grid',gap:8}}>
         {loading && <div>Loading...</div>}
         {error && <div style={{color:'#b91c1c',fontSize:12}}>{error}</div>}
         {!loading && !error && (
